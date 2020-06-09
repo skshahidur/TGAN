@@ -24,29 +24,24 @@ from tensorpack.tfutils.summary import add_moving_summary
 from tensorpack.utils.argtools import memoized
 
 from tgan.data import Preprocessor, RandomZData, TGANDataFlow
-from tgan.trainer import GANTrainer
+from tgan.trainer import GANTrainer, MultiGPUGANTrainer
+from tensorflow.python.client import device_lib
+
 
 TUNABLE_VARIABLES = {
-    'batch_size': [50, 100, 200],
-    'z_dim': [50, 100, 200, 400],
-    'num_gen_rnn': [100, 200, 300, 400, 500, 600],
-    'num_gen_feature': [100, 200, 300, 400, 500, 600],
-    'num_dis_layers': [1, 2, 3, 4, 5],
-    'num_dis_hidden': [100, 200, 300, 400, 500],
-    'learning_rate': [0.0002, 0.0005, 0.001],
-    'noise': [0.05, 0.1, 0.2, 0.3]
+    "batch_size": [50, 100, 200],
+    "z_dim": [50, 100, 200, 400],
+    "num_gen_rnn": [100, 200, 300, 400, 500, 600],
+    "num_gen_feature": [100, 200, 300, 400, 500, 600],
+    "num_dis_layers": [1, 2, 3, 4, 5],
+    "num_dis_hidden": [100, 200, 300, 400, 500],
+    "learning_rate": [0.0002, 0.0005, 0.001],
+    "noise": [0.05, 0.1, 0.2, 0.3]
 }
 
 
 class GraphBuilder(ModelDescBase):
-    """Main model for TGAN.
-
-    Args:
-        None
-
-    Attributes:
-
-    """
+    """Main model for TGAN."""
 
     def __init__(
         self,
@@ -60,7 +55,7 @@ class GraphBuilder(ModelDescBase):
         num_gen_feature=100,
         num_dis_layers=1,
         num_dis_hidden=100,
-        optimizer='AdamOptimizer',
+        optimizer="AdamOptimizer",
         training=True
     ):
         """Initialize the object, set arguments as attributes."""
@@ -77,7 +72,7 @@ class GraphBuilder(ModelDescBase):
         self.optimizer = optimizer
         self.training = training
 
-    def collect_variables(self, g_scope='gen', d_scope='discrim'):
+    def collect_variables(self, g_scope="gen", d_scope="discrim"):
         """Assign generator and discriminator variables from their scopes.
 
         Args:
@@ -92,7 +87,7 @@ class GraphBuilder(ModelDescBase):
         self.d_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, d_scope)
 
         if not (self.g_vars or self.d_vars):
-            raise ValueError('There are no variables defined in some of the given scopes')
+            raise ValueError("There are no variables defined in some of the given scopes")
 
     def build_losses(self, logits_real, logits_fake, extra_g=0, l2_norm=0.00001):
         r"""D and G play two-player minimax game with value function :math:`V(G,D)`.
@@ -115,8 +110,8 @@ class GraphBuilder(ModelDescBase):
         with tf.name_scope("GAN_loss"):
             score_real = tf.sigmoid(logits_real)
             score_fake = tf.sigmoid(logits_fake)
-            tf.summary.histogram('score-real', score_real)
-            tf.summary.histogram('score-fake', score_fake)
+            tf.summary.histogram("score-real", score_real)
+            tf.summary.histogram("score-fake", score_fake)
 
             with tf.name_scope("discrim"):
                 d_loss_pos = tf.reduce_mean(
@@ -126,35 +121,35 @@ class GraphBuilder(ModelDescBase):
                             tf.shape(logits_real),
                             maxval=0.3
                     ),
-                    name='loss_real'
+                    name="loss_real"
                 )
 
                 d_loss_neg = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-                    logits=logits_fake, labels=tf.zeros_like(logits_fake)), name='loss_fake')
+                    logits=logits_fake, labels=tf.zeros_like(logits_fake)), name="loss_fake")
 
                 d_pos_acc = tf.reduce_mean(
-                    tf.cast(score_real > 0.5, tf.float32), name='accuracy_real')
+                    tf.cast(score_real > 0.5, tf.float32), name="accuracy_real")
 
                 d_neg_acc = tf.reduce_mean(
-                    tf.cast(score_fake < 0.5, tf.float32), name='accuracy_fake')
+                    tf.cast(score_fake < 0.5, tf.float32), name="accuracy_fake")
 
                 d_loss = 0.5 * d_loss_pos + 0.5 * d_loss_neg + \
                     tf.contrib.layers.apply_regularization(
                         tf.contrib.layers.l2_regularizer(l2_norm),
                         tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discrim"))
 
-                self.d_loss = tf.identity(d_loss, name='loss')
+                self.d_loss = tf.identity(d_loss, name="loss")
 
             with tf.name_scope("gen"):
                 g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
                     logits=logits_fake, labels=tf.ones_like(logits_fake))) + \
                     tf.contrib.layers.apply_regularization(
                         tf.contrib.layers.l2_regularizer(l2_norm),
-                        tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'gen'))
+                        tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "gen"))
 
-                g_loss = tf.identity(g_loss, name='loss')
-                extra_g = tf.identity(extra_g, name='klloss')
-                self.g_loss = tf.identity(g_loss + extra_g, name='final-g-loss')
+                g_loss = tf.identity(g_loss, name="loss")
+                extra_g = tf.identity(extra_g, name="klloss")
+                self.g_loss = tf.identity(g_loss + extra_g, name="final-g-loss")
 
             add_moving_summary(
                 g_loss, extra_g, self.g_loss, self.d_loss, d_pos_acc, d_neg_acc, decay=0.)
@@ -171,32 +166,32 @@ class GraphBuilder(ModelDescBase):
             list[tensorpack.InputDesc]
 
         Raises:
-            ValueError: If any of the elements in self.metadata['details'] has an unsupported
+            ValueError: If any of the elements in self.metadata["details"] has an unsupported
                         value in the `type` key.
 
         """
         inputs = []
-        for col_id, col_info in enumerate(self.metadata['details']):
-            if col_info['type'] == 'value':
-                gaussian_components = col_info['n']
+        for col_id, col_info in enumerate(self.metadata["details"]):
+            if col_info["type"] == "value":
+                gaussian_components = col_info["n"]
                 inputs.append(
-                    InputDesc(tf.float32, (self.batch_size, 1), 'input%02dvalue' % col_id))
+                    InputDesc(tf.float32, (self.batch_size, 1), "input%02dvalue" % col_id))
 
                 inputs.append(
                     InputDesc(
                         tf.float32,
                         (self.batch_size, gaussian_components),
-                        'input%02dcluster' % col_id
+                        "input%02dcluster" % col_id
                     )
                 )
 
-            elif col_info['type'] == 'category':
-                inputs.append(InputDesc(tf.int32, (self.batch_size, 1), 'input%02d' % col_id))
+            elif col_info["type"] == "category":
+                inputs.append(InputDesc(tf.int32, (self.batch_size, 1), "input%02d" % col_id))
 
             else:
                 raise ValueError(
                     "self.metadata['details'][{}]['type'] must be either `category` or "
-                    "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                    "`values`. Instead it was {}.".format(col_id, col_info["type"])
                 )
 
         return inputs
@@ -251,32 +246,32 @@ class GraphBuilder(ModelDescBase):
             list[tensorflow.Tensor]: Outpu
 
         Raises:
-            ValueError: If any of the elements in self.metadata['details'] has an unsupported
+            ValueError: If any of the elements in self.metadata["details"] has an unsupported
                         value in the `type` key.
 
         """
-        with tf.variable_scope('LSTM'):
+        with tf.variable_scope("LSTM"):
             cell = tf.nn.rnn_cell.LSTMCell(self.num_gen_rnn)
 
-            state = cell.zero_state(self.batch_size, dtype='float32')
+            state = cell.zero_state(self.batch_size, dtype="float32")
             attention = tf.zeros(
-                shape=(self.batch_size, self.num_gen_rnn), dtype='float32')
-            input = tf.get_variable(name='go', shape=(1, self.num_gen_feature))  # <GO>
+                shape=(self.batch_size, self.num_gen_rnn), dtype="float32")
+            input = tf.get_variable(name="go", shape=(1, self.num_gen_feature))  # <GO>
             input = tf.tile(input, [self.batch_size, 1])
             input = tf.concat([input, z], axis=1)
 
             ptr = 0
             outputs = []
             states = []
-            for col_id, col_info in enumerate(self.metadata['details']):
-                if col_info['type'] == 'value':
+            for col_id, col_info in enumerate(self.metadata["details"]):
+                if col_info["type"] == "value":
                     output, state = cell(tf.concat([input, attention], axis=1), state)
                     states.append(state[1])
 
-                    gaussian_components = col_info['n']
+                    gaussian_components = col_info["n"]
                     with tf.variable_scope("%02d" % ptr):
-                        h = FullyConnected('FC', output, self.num_gen_feature, nl=tf.tanh)
-                        outputs.append(FullyConnected('FC2', h, 1, nl=tf.tanh))
+                        h = FullyConnected("FC", output, self.num_gen_feature, nl=tf.tanh)
+                        outputs.append(FullyConnected("FC2", h, 1, nl=tf.tanh))
                         input = tf.concat([h, z], axis=1)
                         attw = tf.get_variable("attw", shape=(len(states), 1, 1))
                         attw = tf.nn.softmax(attw, axis=0)
@@ -287,10 +282,10 @@ class GraphBuilder(ModelDescBase):
                     output, state = cell(tf.concat([input, attention], axis=1), state)
                     states.append(state[1])
                     with tf.variable_scope("%02d" % ptr):
-                        h = FullyConnected('FC', output, self.num_gen_feature, nl=tf.tanh)
-                        w = FullyConnected('FC2', h, gaussian_components, nl=tf.nn.softmax)
+                        h = FullyConnected("FC", output, self.num_gen_feature, nl=tf.tanh)
+                        w = FullyConnected("FC2", h, gaussian_components, nl=tf.nn.softmax)
                         outputs.append(w)
-                        input = FullyConnected('FC3', w, self.num_gen_feature, nl=tf.identity)
+                        input = FullyConnected("FC3", w, self.num_gen_feature, nl=tf.identity)
                         input = tf.concat([input, z], axis=1)
                         attw = tf.get_variable("attw", shape=(len(states), 1, 1))
                         attw = tf.nn.softmax(attw, axis=0)
@@ -298,16 +293,16 @@ class GraphBuilder(ModelDescBase):
 
                     ptr += 1
 
-                elif col_info['type'] == 'category':
+                elif col_info["type"] == "category":
                     output, state = cell(tf.concat([input, attention], axis=1), state)
                     states.append(state[1])
                     with tf.variable_scope("%02d" % ptr):
-                        h = FullyConnected('FC', output, self.num_gen_feature, nl=tf.tanh)
-                        w = FullyConnected('FC2', h, col_info['n'], nl=tf.nn.softmax)
+                        h = FullyConnected("FC", output, self.num_gen_feature, nl=tf.tanh)
+                        w = FullyConnected("FC2", h, col_info["n"], nl=tf.nn.softmax)
                         outputs.append(w)
-                        one_hot = tf.one_hot(tf.argmax(w, axis=1), col_info['n'])
+                        one_hot = tf.one_hot(tf.argmax(w, axis=1), col_info["n"])
                         input = FullyConnected(
-                            'FC3', one_hot, self.num_gen_feature, nl=tf.identity)
+                            "FC3", one_hot, self.num_gen_feature, nl=tf.identity)
                         input = tf.concat([input, z], axis=1)
                         attw = tf.get_variable("attw", shape=(len(states), 1, 1))
                         attw = tf.nn.softmax(attw, axis=0)
@@ -318,7 +313,7 @@ class GraphBuilder(ModelDescBase):
                 else:
                     raise ValueError(
                         "self.metadata['details'][{}]['type'] must be either `category` or "
-                        "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                        "`values`. Instead it was {}.".format(col_id, col_info["type"])
                     )
 
         return outputs
@@ -368,7 +363,7 @@ class GraphBuilder(ModelDescBase):
             tensorflow.Tensor
 
         """
-        M = FullyConnected('fc_diversity', l, n_kernel * kernel_dim, nl=tf.identity)
+        M = FullyConnected("fc_diversity", l, n_kernel * kernel_dim, nl=tf.identity)
         M = tf.reshape(M, [-1, n_kernel, kernel_dim])
         M1 = tf.reshape(M, [-1, 1, n_kernel, kernel_dim])
         M2 = tf.reshape(M, [1, -1, n_kernel, kernel_dim])
@@ -411,22 +406,22 @@ class GraphBuilder(ModelDescBase):
         """
         logits = tf.concat(vecs, axis=1)
         for i in range(self.num_dis_layers):
-            with tf.variable_scope('dis_fc{}'.format(i)):
+            with tf.variable_scope("dis_fc{}".format(i)):
                 if i == 0:
                     logits = FullyConnected(
-                        'fc', logits, self.num_dis_hidden, nl=tf.identity,
+                        "fc", logits, self.num_dis_hidden, nl=tf.identity,
                         kernel_initializer=tf.truncated_normal_initializer(stddev=0.1)
                     )
 
                 else:
-                    logits = FullyConnected('fc', logits, self.num_dis_hidden, nl=tf.identity)
+                    logits = FullyConnected("fc", logits, self.num_dis_hidden, nl=tf.identity)
 
                 logits = tf.concat([logits, self.batch_diversity(logits)], axis=1)
-                logits = BatchNorm('bn', logits, center=True, scale=False)
+                logits = BatchNorm("bn", logits, center=True, scale=False)
                 logits = Dropout(logits)
                 logits = tf.nn.leaky_relu(logits)
 
-        return FullyConnected('dis_fc_top', logits, 1, nl=tf.identity)
+        return FullyConnected("dis_fc_top", logits, 1, nl=tf.identity)
 
     @staticmethod
     def compute_kl(real, pred):
@@ -453,23 +448,23 @@ class GraphBuilder(ModelDescBase):
 
         """
         z = tf.random_normal(
-            [self.batch_size, self.z_dim], name='z_train')
+            [self.batch_size, self.z_dim], name="z_train")
 
-        z = tf.placeholder_with_default(z, [None, self.z_dim], name='z')
+        z = tf.placeholder_with_default(z, [None, self.z_dim], name="z")
 
-        with tf.variable_scope('gen'):
+        with tf.variable_scope("gen"):
             vecs_gen = self.generator(z)
 
             vecs_denorm = []
             ptr = 0
-            for col_id, col_info in enumerate(self.metadata['details']):
-                if col_info['type'] == 'category':
+            for col_id, col_info in enumerate(self.metadata["details"]):
+                if col_info["type"] == "category":
                     t = tf.argmax(vecs_gen[ptr], axis=1)
-                    t = tf.cast(tf.reshape(t, [-1, 1]), 'float32')
+                    t = tf.cast(tf.reshape(t, [-1, 1]), "float32")
                     vecs_denorm.append(t)
                     ptr += 1
 
-                elif col_info['type'] == 'value':
+                elif col_info["type"] == "value":
                     vecs_denorm.append(vecs_gen[ptr])
                     ptr += 1
                     vecs_denorm.append(vecs_gen[ptr])
@@ -478,16 +473,16 @@ class GraphBuilder(ModelDescBase):
                 else:
                     raise ValueError(
                         "self.metadata['details'][{}]['type'] must be either `category` or "
-                        "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                        "`values`. Instead it was {}.".format(col_id, col_info["type"])
                     )
 
-            tf.identity(tf.concat(vecs_denorm, axis=1), name='gen')
+            tf.identity(tf.concat(vecs_denorm, axis=1), name="gen")
 
         vecs_pos = []
         ptr = 0
-        for col_id, col_info in enumerate(self.metadata['details']):
-            if col_info['type'] == 'category':
-                one_hot = tf.one_hot(tf.reshape(inputs[ptr], [-1]), col_info['n'])
+        for col_id, col_info in enumerate(self.metadata["details"]):
+            if col_info["type"] == "category":
+                one_hot = tf.one_hot(tf.reshape(inputs[ptr], [-1]), col_info["n"])
                 noise_input = one_hot
 
                 if self.training:
@@ -498,7 +493,7 @@ class GraphBuilder(ModelDescBase):
                 vecs_pos.append(noise_input)
                 ptr += 1
 
-            elif col_info['type'] == 'value':
+            elif col_info["type"] == "value":
                 vecs_pos.append(inputs[ptr])
                 ptr += 1
                 vecs_pos.append(inputs[ptr])
@@ -507,14 +502,14 @@ class GraphBuilder(ModelDescBase):
             else:
                 raise ValueError(
                     "self.metadata['details'][{}]['type'] must be either `category` or "
-                    "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                    "`values`. Instead it was {}.".format(col_id, col_info["type"])
                 )
 
         KL = 0.
         ptr = 0
         if self.training:
-            for col_id, col_info in enumerate(self.metadata['details']):
-                if col_info['type'] == 'category':
+            for col_id, col_info in enumerate(self.metadata["details"]):
+                if col_info["type"] == "category":
                     dist = tf.reduce_sum(vecs_gen[ptr], axis=0)
                     dist = dist / tf.reduce_sum(dist)
 
@@ -523,7 +518,7 @@ class GraphBuilder(ModelDescBase):
                     KL += self.compute_kl(real, dist)
                     ptr += 1
 
-                elif col_info['type'] == 'value':
+                elif col_info["type"] == "value":
                     ptr += 1
                     dist = tf.reduce_sum(vecs_gen[ptr], axis=0)
                     dist = dist / tf.reduce_sum(dist)
@@ -536,10 +531,10 @@ class GraphBuilder(ModelDescBase):
                 else:
                     raise ValueError(
                         "self.metadata['details'][{}]['type'] must be either `category` or "
-                        "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                        "`values`. Instead it was {}.".format(col_id, col_info["type"])
                     )
 
-        with tf.variable_scope('discrim'):
+        with tf.variable_scope("discrim"):
             discrim_pos = self.discriminator(vecs_pos)
             discrim_neg = self.discriminator(vecs_gen)
 
@@ -547,10 +542,10 @@ class GraphBuilder(ModelDescBase):
         self.collect_variables()
 
     def _get_optimizer(self):
-        if self.optimizer == 'AdamOptimizer':
+        if self.optimizer == "AdamOptimizer":
             return tf.train.AdamOptimizer(self.learning_rate, 0.5)
 
-        elif self.optimizer == 'AdadeltaOptimizer':
+        elif self.optimizer == "AdadeltaOptimizer":
             return tf.train.AdadeltaOptimizer(self.learning_rate, 0.95)
 
         else:
@@ -593,16 +588,16 @@ class TGANModel:
     """
 
     def __init__(
-        self, continuous_columns, output='output', gpu=None, max_epoch=5, steps_per_epoch=10000,
+        self, continuous_columns, output="output", gpus=None, max_epoch=5, steps_per_epoch=10000,
         save_checkpoints=True, restore_session=True, batch_size=200, z_dim=200, noise=0.2,
         l2norm=0.00001, learning_rate=0.001, num_gen_rnn=100, num_gen_feature=100,
-        num_dis_layers=1, num_dis_hidden=100, optimizer='AdamOptimizer',
+        num_dis_layers=1, num_dis_hidden=100, optimizer="AdamOptimizer",
     ):
         """Initialize object."""
         # Output
         self.continuous_columns = continuous_columns
-        self.log_dir = os.path.join(output, 'logs')
-        self.model_dir = os.path.join(output, 'model')
+        self.log_dir = os.path.join(output, "logs")
+        self.model_dir = os.path.join(output, "model")
         self.output = output
 
         # Training params
@@ -624,10 +619,14 @@ class TGANModel:
         self.num_dis_hidden = num_dis_hidden
         self.optimizer = optimizer
 
-        if gpu:
-            os.environ['CUDA_VISIBLE_DEVICES'] = gpu
+        self.gpus = gpus or self.get_gpus()
+        if self.gpus:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(list(map(str, self.gpus)))
 
-        self.gpu = gpu
+    def get_gpus():
+        """Setting up GPU."""
+        return [x.locality.bus_id for x in device_lib.list_local_devices()
+                if x.device_type == "GPU"]
 
     def get_model(self, training=True):
         """Return a new instance of the model."""
@@ -657,8 +656,8 @@ class TGANModel:
         predict_config = PredictConfig(
             session_init=SaverRestore(self.restore_path),
             model=self.model,
-            input_names=['z'],
-            output_names=['gen/gen', 'z'],
+            input_names=["z"],
+            output_names=["gen/gen", "z"],
         )
 
         self.simple_dataset_predictor = SimpleDatasetPredictor(
@@ -685,23 +684,31 @@ class TGANModel:
 
         self.model = self.get_model(training=True)
 
-        trainer = GANTrainer(
+        def get_trainer(self, model, input_queue):
+            if self.gpus > 1:
+                return MultiGPUGANTrainer(self.gpus)
+            else:
+                GANTrainer(
+                    model=self.model,
+                    input_queue=input_queue,)
+
+        trainer = get_trainer(
             model=self.model,
             input_queue=input_queue,
         )
 
-        self.restore_path = os.path.join(self.model_dir, 'checkpoint')
+        self.restore_path = os.path.join(self.model_dir, "checkpoint")
 
         if os.path.isfile(self.restore_path) and self.restore_session:
             session_init = SaverRestore(self.restore_path)
-            with open(os.path.join(self.log_dir, 'stats.json')) as f:
-                starting_epoch = json.load(f)[-1]['epoch_num'] + 1
+            with open(os.path.join(self.log_dir, "stats.json")) as f:
+                starting_epoch = json.load(f)[-1]["epoch_num"] + 1
 
         else:
             session_init = None
             starting_epoch = 1
 
-        action = 'k' if self.restore_session else None
+        action = "k" if self.restore_session else None
         logger.set_logger_dir(self.log_dir, action=action)
 
         callbacks = []
@@ -743,30 +750,30 @@ class TGANModel:
 
         ptr = 0
         features = {}
-        for col_id, col_info in enumerate(self.metadata['details']):
-            if col_info['type'] == 'category':
-                features['f%02d' % col_id] = results[:, ptr:ptr + 1]
+        for col_id, col_info in enumerate(self.metadata["details"]):
+            if col_info["type"] == "category":
+                features["f%02d" % col_id] = results[:, ptr:ptr + 1]
                 ptr += 1
 
-            elif col_info['type'] == 'value':
-                gaussian_components = col_info['n']
+            elif col_info["type"] == "value":
+                gaussian_components = col_info["n"]
                 val = results[:, ptr:ptr + 1]
                 ptr += 1
                 pro = results[:, ptr:ptr + gaussian_components]
                 ptr += gaussian_components
-                features['f%02d' % col_id] = np.concatenate([val, pro], axis=1)
+                features["f%02d" % col_id] = np.concatenate([val, pro], axis=1)
 
             else:
                 raise ValueError(
                     "self.metadata['details'][{}]['type'] must be either `category` or "
-                    "`values`. Instead it was {}.".format(col_id, col_info['type'])
+                    "`values`. Instead it was {}.".format(col_id, col_info["type"])
                 )
 
         return self.preprocessor.reverse_transform(features)[:num_samples].copy()
 
     def tar_folder(self, tar_name):
         """Generate a tar of :self.output:."""
-        with tarfile.open(tar_name, 'w:gz') as tar_handle:
+        with tarfile.open(tar_name, "w:gz") as tar_handle:
             for root, dirs, files in os.walk(self.output):
                 for file_ in files:
                     tar_handle.add(os.path.join(root, file_))
@@ -776,11 +783,11 @@ class TGANModel:
     @classmethod
     def load(cls, path):
         """Load a pretrained model from a given path."""
-        with tarfile.open(path, 'r:gz') as tar_handle:
+        with tarfile.open(path, "r:gz") as tar_handle:
             destination_dir = os.path.dirname(tar_handle.getmembers()[0].name)
             tar_handle.extractall()
 
-        with open('{}/TGANModel'.format(destination_dir), 'rb') as f:
+        with open("{}/TGANModel".format(destination_dir), "rb") as f:
             instance = pickle.load(f)
 
         instance.prepare_sampling()
@@ -789,7 +796,7 @@ class TGANModel:
     def save(self, path, force=False):
         """Save the fitted model in the given path."""
         if os.path.exists(path) and not force:
-            logger.info('The indicated path already exists. Use `force=True` to overwrite.')
+            logger.info("The indicated path already exists. Use `force=True` to overwrite.")
             return
 
         base_path = os.path.dirname(path)
@@ -802,7 +809,7 @@ class TGANModel:
         self.model = None
         self.simple_dataset_predictor = None
 
-        with open('{}/TGANModel'.format(self.output), 'wb') as f:
+        with open("{}/TGANModel".format(self.output), "wb") as f:
             pickle.dump(self, f)
 
         self.model = model
@@ -810,4 +817,4 @@ class TGANModel:
 
         self.tar_folder(path)
 
-        logger.info('Model saved successfully.')
+        logger.info("Model saved successfully.")
