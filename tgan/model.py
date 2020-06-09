@@ -618,12 +618,11 @@ class TGANModel:
         self.num_dis_layers = num_dis_layers
         self.num_dis_hidden = num_dis_hidden
         self.optimizer = optimizer
-
         self.gpus = gpus or self.get_gpus()
         if self.gpus:
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(list(map(str, self.gpus)))
 
-    def get_gpus():
+    def get_gpus(self):
         """Setting up GPU."""
         return [x.locality.bus_id for x in device_lib.list_local_devices()
                 if x.device_type == "GPU"]
