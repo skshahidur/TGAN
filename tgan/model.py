@@ -664,6 +664,14 @@ class TGANModel:
             RandomZData((self.batch_size, self.z_dim))
         )
 
+    def get_trainer(self, model, input_queue):
+        if self.gpus > 1:
+            return MultiGPUGANTrainer(self.gpus)
+        else:
+            return GANTrainer(
+                model=self.model,
+                input_queue=input_queue,)
+
     def fit(self, data):
         """Fit the model to the given data.
 
@@ -683,15 +691,7 @@ class TGANModel:
 
         self.model = self.get_model(training=True)
 
-        def get_trainer(self, model, input_queue):
-            if self.gpus > 1:
-                return MultiGPUGANTrainer(self.gpus)
-            else:
-                GANTrainer(
-                    model=self.model,
-                    input_queue=input_queue,)
-
-        trainer = get_trainer(
+        trainer = self.get_trainer(
             model=self.model,
             input_queue=input_queue,
         )
