@@ -665,7 +665,7 @@ class TGANModel:
         )
 
     def get_trainer(self, model, input_queue):
-        if self.gpus > 1:
+        if len(self.gpus) > 1:
             return MultiGPUGANTrainer(self.gpus)
         else:
             return GANTrainer(
